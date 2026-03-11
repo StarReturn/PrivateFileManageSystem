@@ -1,0 +1,54 @@
+# ========== 排除 dist 文件夹（打包输出目录） ==========
+dist/
+*/dist/
+
+# ========== 排除 build 文件夹（PyInstaller 临时文件） ==========
+build/
+*/build/
+
+# ========== 排除前端构建文件 ==========
+frontend/dist/
+frontend/node_modules/
+
+# ========== 排除 Python 缓存和编译文件 ==========
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.pyd
+
+# ========== 排除虚拟环境 ==========
+venv/
+env/
+ENV/
+fileManagePY37/
+*.egg-info/
+.eggs/
+
+# ========== 排除 IDE 和编辑器文件 ==========
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ========== 排除日志和临时文件 ==========
+*.log
+*.tmp
+*.temp
+cef_debug.log
+
+# ========== 排除数据库文件（SQLite） ==========
+*.db
+*.sqlite
+*.sqlite3
+backend/database/*.db
+
+# ========== 排除证书和密钥文件 ==========
+*.pem
+*.key
+*.crt
+.env
+.env.local

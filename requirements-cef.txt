@@ -1,0 +1,50 @@
+# File Management System - Python 3.7 Compatible Dependencies
+# For Windows 7 compatibility packaging with CEF Python
+# OFD support via JAR (OFDRW) - no Python OFD library needed
+#
+# Usage:
+# 1. Install Python 3.7.9 (64-bit)
+# 2. python -m venv venv37
+# 3. venv37\Scripts\activate
+# 4. pip install -r requirements-cef.txt
+
+# === Desktop View (CEF Python for Win7) ===
+cefpython3==66.0
+pywin32==305  # Windows API bindings
+
+# === Web Framework ===
+Flask==2.0.3
+Flask-CORS==3.0.10
+Werkzeug==2.0.3
+
+# === Database ===
+Flask-SQLAlchemy==2.5.1
+SQLAlchemy==1.4.46
+
+# === Authentication ===
+PyJWT==2.4.0
+passlib==1.7.4
+cryptography==3.4.8  # Win7 兼容版本
+
+# === File Processing ===
+Pillow==9.5.0
+python-docx==1.1.0
+PyPDF2==3.0.1
+PyMuPDF==1.19.0  # PDF to image conversion
+pdfplumber==0.6.0  # PDF processing
+openpyxl==3.0.10  # Excel 转 HTML (Python 3.7 兼容版本)
+
+# === OFD Support (JAR-based) ===
+# No Python packages needed - uses tools/ofd-converter.jar
+
+# === Networking ===
+requests==2.31.0
+
+# === Packaging Tool ===
+pyinstaller==5.13.2
+
+# === Other Dependencies ===
+itsdangerous==2.0.1
+Jinja2==3.0.3
+MarkupSafe==2.0.1
+click==8.0.4
