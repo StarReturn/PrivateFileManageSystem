@@ -796,8 +796,7 @@ import {
   updateDrawing,
   deleteDrawing,
   downloadDrawing,
-  previewDrawing as getPreviewUrl,
-  getPreviewImages
+  getKkPreviewUrl
 } from '@/api/file'
 import UploadDialog from '@/components/UploadDialog.vue'
 
@@ -1726,88 +1725,23 @@ const handlePreview = async (row) => {
     }
     return
   }
-
-  // 检查是否已存在该文件的标签
-  const existingTab = previewTabs.value.find(tab => tab.drawing_id === row.drawing_id)
-  if (existingTab) {
-    // 已存在，直接激活
-    activePreviewTabId.value = existingTab.id
-    showPreviewDialog.value = true
-    return
-  }
-
-  // 检查标签页数量限制
-  if (previewTabs.value.length >= MAX_PREVIEW_TABS) {
-    ElMessage.warning(`最多只能同时打开 ${MAX_PREVIEW_TABS} 个预览标签页，请先关闭一些标签页`)
-    return
-  }
-
-  // 创建新标签页 - 每个标签页都有独立的狀態
-  const newTab = {
-    id: generateTabId(),
-    drawing_id: row.drawing_id,
-    drawing_name: row.drawing_name,
-    file_type: row.file_type,
-    loading: true,
-    error: false,
-    errorMessage: '',
-    mode: '',  // 'html' 或 'images'
-    htmlPreviewUrl: '',
-    images: [],  // 独立的图片数组
-    currentPage: 1,
-    totalPages: 0,
-    imageScale: 1.0,
-    imagePosition: { x: 0, y: 0 },
-    isDragging: false,
-    dragStart: { x: 0, y: 0 }
-  }
-
-  previewTabs.value.push(newTab)
-  activePreviewTabId.value = newTab.id
-  showPreviewDialog.value = true
-
-  // 加载预览数据
   try {
-    // 判断预览模式
-    if (['xlsx', 'xls', 'doc', 'docx'].includes(row.file_type)) {
-      newTab.mode = 'html'
-      const token = localStorage.getItem('token')
-      newTab.htmlPreviewUrl = `/api/drawings/${row.drawing_id}/preview-html?token=${token || ''}`
-      newTab.loading = false
+    const response = await getKkPreviewUrl(row.drawing_id)
+    const data = response.data || response
+    const previewUrl = data.preview_url
 
-      // 监听 iframe 加载错误
-      setTimeout(() => {
-        // HTML 预览模式下，iframe 会在加载完成后自动显示
-        console.log(`[handlePreview] ${row.drawing_name} HTML 预览 URL 已设置`)
-      }, 100)
-    } else {
-      // PDF/OFD/CEB: 获取图片预览
-      newTab.mode = 'images'
-      const response = await getPreviewImages(row.drawing_id)
-      console.log('[handlePreview] API 返回:', response)
+    if (!previewUrl) {
+      throw new Error(data.error || '未获取到预览地址')
+    }
 
-      // 确保正确处理 API 返回的数据
-      const apiData = response.data || response
-
-      if (apiData.success && apiData.images && Array.isArray(apiData.images) && apiData.images.length > 0) {
-        // 深拷贝图片数组，确保每个标签页有独立的数据
-        newTab.images = JSON.parse(JSON.stringify(apiData.images))
-        newTab.totalPages = apiData.page_count || apiData.images.length
-        newTab.loading = false
-        console.log(`[handlePreview] ${row.drawing_name} 图片加载成功，${newTab.images.length} 页`)
-      } else {
-        console.error('[handlePreview] 图片数据格式异常:', apiData)
-        newTab.error = true
-        newTab.errorMessage = apiData.error || apiData.message || '获取预览图片失败'
-        newTab.loading = false
-      }
+    const opened = window.open(previewUrl, '_blank')
+    if (!opened) {
+      ElMessage.warning('预览窗口被拦截，请检查系统设置')
     }
   } catch (err) {
-    console.error('[handlePreview] 预览失败:', err)
-    const errorMsg = err.response?.data?.error || err.response?.data?.message || '预览失败'
-    newTab.error = true
-    newTab.errorMessage = errorMsg
-    newTab.loading = false
+    console.error('[handlePreview] 打开 kkFileView 预览失败:', err)
+    const errorMsg = err.response?.data?.error || err.response?.data?.message || err.message || '预览失败'
+    ElMessage.error(errorMsg)
   }
 }
 

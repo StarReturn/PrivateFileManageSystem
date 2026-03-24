@@ -54,6 +54,8 @@ for arg in gpu_args + resource_args:
 # ========== 导入其他模块 ==========
 import threading
 import time
+import subprocess
+import glob
 
 # 添加项目根目录到路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -110,6 +112,180 @@ settings = {
     "single_process": True,  # 使用单进程模式
 }
 
+# 预览与 kkFileView 配置
+KK_PORT = 8012
+KK_HEALTH_URL = f"http://127.0.0.1:{KK_PORT}"
+WINDOWS_CREATE_NO_WINDOW = 0x08000000
+WINDOWS_STARTF_USESHOWWINDOW = 0x00000001
+
+
+class KkFileViewManager:
+    """kkFileView 进程管理（静默启动/停止）"""
+
+    def __init__(self):
+        self.process = None
+        self.kk_root = os.path.join(exe_dir, 'tools', 'kkfileview')
+
+    def _is_ready(self):
+        try:
+            import requests
+            resp = requests.get(KK_HEALTH_URL, timeout=1.5)
+            return resp.status_code == 200
+        except Exception:
+            return False
+
+    def _run_hidden(self, command, cwd=None):
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= WINDOWS_STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = 0
+        return subprocess.Popen(
+            command,
+            cwd=cwd,
+            creationflags=WINDOWS_CREATE_NO_WINDOW,
+            startupinfo=startupinfo,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+
+    def start(self):
+        if self._is_ready():
+            print("✓ kkFileView 已在运行")
+            return True
+
+        if not os.path.exists(self.kk_root):
+            print(f"⚠ 未找到 kkFileView 目录: {self.kk_root}")
+            return False
+
+        started = False
+        startup_bat = os.path.join(self.kk_root, 'bin', 'startup.bat')
+        if os.path.exists(startup_bat):
+            try:
+                self.process = self._run_hidden(['cmd', '/c', startup_bat], cwd=os.path.dirname(startup_bat))
+                started = True
+            except Exception as e:
+                print(f"⚠ 启动 kkFileView startup.bat 失败: {e}")
+
+        if not started:
+            jar_candidates = glob.glob(os.path.join(self.kk_root, '*.jar'))
+            if jar_candidates:
+                try:
+                    self.process = self._run_hidden(['java', '-jar', jar_candidates[0]], cwd=self.kk_root)
+                    started = True
+                except Exception as e:
+                    print(f"⚠ 启动 kkFileView jar 失败: {e}")
+
+        if not started:
+            print("⚠ 未找到可启动的 kkFileView 脚本或 jar")
+            return False
+
+        for _ in range(60):
+            time.sleep(0.5)
+            if self._is_ready():
+                print("✓ kkFileView 已就绪")
+                return True
+
+        print("⚠ kkFileView 启动超时")
+        return False
+
+    def stop(self):
+        shutdown_bat = os.path.join(self.kk_root, 'bin', 'shutdown.bat')
+        if os.path.exists(shutdown_bat):
+            try:
+                self._run_hidden(['cmd', '/c', shutdown_bat], cwd=os.path.dirname(shutdown_bat))
+                return
+            except Exception:
+                pass
+
+        if self.process and self.process.poll() is None:
+            try:
+                self.process.terminate()
+            except Exception:
+                pass
+
+
+class PreviewWindowManager:
+    """独立 CEF 预览子窗口管理器"""
+
+    def __init__(self, root):
+        self.root = root
+        self.windows = {}
+
+    def open_window(self, url, title='文件预览'):
+        preview_window = tk.Toplevel(self.root)
+        preview_window.title(title)
+        preview_window.geometry("1280x860")
+        preview_window.minsize(900, 600)
+        preview_window.update_idletasks()
+
+        width = preview_window.winfo_width()
+        height = preview_window.winfo_height()
+        window_handle = preview_window.winfo_id()
+
+        window_info = cef.WindowInfo()
+        window_info.SetAsChild(window_handle, [0, 0, width, height])
+        browser = cef.CreateBrowserSync(
+            window_info=window_info,
+            url=url,
+            window_title=title
+        )
+
+        browser_id = browser.GetIdentifier()
+        self.windows[browser_id] = {
+            'window': preview_window,
+            'browser': browser
+        }
+
+        def on_window_configure(_event):
+            try:
+                item = self.windows.get(browser_id)
+                if not item:
+                    return
+                b = item['browser']
+                cef_window = b.GetWindowHandle()
+                if cef_window:
+                    win_w = preview_window.winfo_width()
+                    win_h = preview_window.winfo_height()
+                    windll.user32.SetWindowPos(
+                        cef_window,
+                        0,
+                        0, 0,
+                        win_w, win_h,
+                        0x0002
+                    )
+            except Exception:
+                pass
+
+        def on_close():
+            try:
+                item = self.windows.pop(browser_id, None)
+                if item:
+                    item['browser'].CloseBrowser(True)
+            except Exception:
+                pass
+            finally:
+                try:
+                    preview_window.destroy()
+                except Exception:
+                    pass
+
+        preview_window.bind('<Configure>', on_window_configure)
+        preview_window.protocol("WM_DELETE_WINDOW", on_close)
+
+
+class PopupHandler:
+    """拦截 window.open 并改为独立 CEF 子窗口"""
+
+    def __init__(self, preview_manager):
+        self.preview_manager = preview_manager
+
+    def OnBeforePopup(self, browser, frame, target_url, target_frame_name,
+                      target_disposition, user_gesture, popup_features,
+                      window_info, client, browser_settings, no_javascript_access):
+        if target_url:
+            self.preview_manager.open_window(target_url, title='文件预览')
+            return True
+        return False
+
 
 class DownloadHandler:
     """下载处理器"""
@@ -147,8 +323,9 @@ class DownloadHandler:
 class ClientHandler:
     """CEF 客户端处理器"""
 
-    def __init__(self):
+    def __init__(self, preview_manager):
         self.download_handler = None
+        self.popup_handler = PopupHandler(preview_manager)
 
     def OnBeforeClose(self, browser):
         """浏览器关闭时"""
@@ -163,6 +340,14 @@ class ClientHandler:
     def OnDownloadUpdated(self, browser, download_item, callback):
         """下载更新回调"""
         pass
+
+    def OnBeforePopup(self, browser, frame, target_url, target_frame_name,
+                      target_disposition, user_gesture, popup_features,
+                      window_info, client, browser_settings, no_javascript_access):
+        return self.popup_handler.OnBeforePopup(
+            browser, frame, target_url, target_frame_name, target_disposition,
+            user_gesture, popup_features, window_info, client, browser_settings, no_javascript_access
+        )
 
 
 def create_flask_app():
@@ -184,6 +369,7 @@ def run_flask():
 def main():
     """启动桌面应用"""
     print("正在启动文件管理系统...")
+    kk_manager = KkFileViewManager()
 
     # 在后台线程启动Flask
     flask_thread = threading.Thread(target=run_flask, daemon=True)
@@ -207,6 +393,9 @@ def main():
     if not flask_ready:
         print("⚠ 后端服务启动超时")
 
+    # 启动 kkFileView（静默）
+    kk_manager.start()
+
     # 检查前端文件
     frontend_path = os.path.join(exe_dir, 'frontend', 'dist', 'index.html')
     print(f"前端文件存在: {os.path.exists(frontend_path)}")
@@ -220,6 +409,7 @@ def main():
     root.title("文件管理系统")
     root.geometry("1400x900")
     root.minsize(1000, 600)
+    preview_manager = PreviewWindowManager(root)
 
     # 获取窗口句柄
     window_handle = root.winfo_id()
@@ -237,6 +427,7 @@ def main():
         url=url,
         window_title="FileManagement"
     )
+    browser.SetClientHandler(ClientHandler(preview_manager))
 
     # 页面加载完成后隐藏控制台的标志
     console_hidden = [False]  # 使用列表以便在闭包中修改
@@ -316,6 +507,7 @@ def main():
         # 清理 CEF
         print("正在关闭...")
         cef.Shutdown()
+        kk_manager.stop()
         print("CEF 已关闭，程序退出中...")
 
         # 可选：延迟 2 秒关闭（方便查看日志）

@@ -58,6 +58,8 @@ a = Analysis(
         # OFD 转换工具（JAR + JRE）
         ('tools/ofd-converter.jar', 'tools'),
         ('tools/jre1.8.0_151', 'tools/jre1.8.0_151'),
+        # kkFileView（独立预览服务）
+        ('tools/kkfileview', 'tools/kkfileview'),
     ],
     hiddenimports=[
         'cefpython3',

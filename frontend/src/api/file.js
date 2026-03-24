@@ -89,3 +89,11 @@ export const getPreviewImages = (drawingId) => {
     method: 'GET'
   })
 }
+
+// 获取 kkFileView 预览链接
+export const getKkPreviewUrl = (drawingId) => {
+  return request({
+    url: `/drawings/${drawingId}/preview-url`,
+    method: 'GET'
+  })
+}
