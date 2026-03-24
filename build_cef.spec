@@ -12,10 +12,6 @@ import subprocess
 
 block_cipher = None
 
-# ========== 打包开关（按当前 kkFileView 预览链路精简） ==========
-# 关闭后可显著缩小包体积（不再打包旧的 POI/OFD/JRE1.8 链路）
-ENABLE_LEGACY_PREVIEW_TOOLCHAIN = False
-
 # ========== 在打包前自动构建前端 ==========
 frontend_dir = os.path.join(os.getcwd(), 'frontend')
 dist_dir = os.path.join(frontend_dir, 'dist')
@@ -65,12 +61,6 @@ add_data_if_exists(datas, 'tools/mfc100.dll', 'tools')
 
 # kkFileView（独立预览服务，当前主链路）
 add_data_if_exists(datas, 'tools/kkfileview', 'tools/kkfileview')
-
-# 旧预览链路（POI/OFD/JRE1.8）按开关保留
-if ENABLE_LEGACY_PREVIEW_TOOLCHAIN:
-    add_data_if_exists(datas, 'tools/poi-converter.jar', 'tools')
-    add_data_if_exists(datas, 'tools/ofd-converter.jar', 'tools')
-    add_data_if_exists(datas, 'tools/jre1.8.0_151', 'tools/jre1.8.0_151')
 
 a = Analysis(
     ['backend/app_cef.py'],
