@@ -147,6 +147,18 @@ class KkFileViewManager:
             stderr=subprocess.DEVNULL
         )
 
+    def _get_kk_java_command(self):
+        """优先使用 kkFileView 自带 JRE，其次使用系统 java"""
+        java_candidates = [
+            os.path.join(self.kk_root, 'jre', 'bin', 'java.exe'),
+            os.path.join(self.kk_root, 'runtime', 'bin', 'java.exe'),
+            'java'
+        ]
+        for cmd in java_candidates:
+            if cmd == 'java' or os.path.exists(cmd):
+                return cmd
+        return 'java'
+
     def start(self):
         if self._is_ready():
             print("✓ kkFileView 已在运行")
@@ -169,7 +181,8 @@ class KkFileViewManager:
             jar_candidates = glob.glob(os.path.join(self.kk_root, '*.jar'))
             if jar_candidates:
                 try:
-                    self.process = self._run_hidden(['java', '-jar', jar_candidates[0]], cwd=self.kk_root)
+                    java_cmd = self._get_kk_java_command()
+                    self.process = self._run_hidden([java_cmd, '-jar', jar_candidates[0]], cwd=self.kk_root)
                     started = True
                 except Exception as e:
                     print(f"⚠ 启动 kkFileView jar 失败: {e}")

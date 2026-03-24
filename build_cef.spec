@@ -12,6 +12,10 @@ import subprocess
 
 block_cipher = None
 
+# ========== 打包开关（按当前 kkFileView 预览链路精简） ==========
+# 关闭后可显著缩小包体积（不再打包旧的 POI/OFD/JRE1.8 链路）
+ENABLE_LEGACY_PREVIEW_TOOLCHAIN = False
+
 # ========== 在打包前自动构建前端 ==========
 frontend_dir = os.path.join(os.getcwd(), 'frontend')
 dist_dir = os.path.join(frontend_dir, 'dist')
@@ -36,31 +40,43 @@ if not os.path.exists(dist_dir) or not os.listdir(dist_dir):
 else:
     print("✓ 前端已打包")
 
+
+def add_data_if_exists(data_list, src, dst):
+    """存在才加入 datas，避免路径缺失导致打包失败"""
+    if os.path.exists(src):
+        data_list.append((src, dst))
+    else:
+        print(f"⚠ 跳过不存在的资源: {src}")
+
+
+datas = []
+
+# 前端打包后的静态文件
+add_data_if_exists(datas, 'frontend/dist', 'frontend/dist')
+# Flask 模板和静态文件（保留，避免历史页面路由找不到资源）
+add_data_if_exists(datas, 'backend/templates', 'backend/templates')
+add_data_if_exists(datas, 'backend/static/pdfjs', 'backend/static/pdfjs')
+
+# CEB 转换工具及依赖 DLL（当前仍在用）
+add_data_if_exists(datas, 'tools/ceb2Pdf.exe', 'tools')
+add_data_if_exists(datas, 'tools/libeay32.dll', 'tools')
+add_data_if_exists(datas, 'tools/msvcr100.dll', 'tools')
+add_data_if_exists(datas, 'tools/mfc100.dll', 'tools')
+
+# kkFileView（独立预览服务，当前主链路）
+add_data_if_exists(datas, 'tools/kkfileview', 'tools/kkfileview')
+
+# 旧预览链路（POI/OFD/JRE1.8）按开关保留
+if ENABLE_LEGACY_PREVIEW_TOOLCHAIN:
+    add_data_if_exists(datas, 'tools/poi-converter.jar', 'tools')
+    add_data_if_exists(datas, 'tools/ofd-converter.jar', 'tools')
+    add_data_if_exists(datas, 'tools/jre1.8.0_151', 'tools/jre1.8.0_151')
+
 a = Analysis(
     ['backend/app_cef.py'],
     pathex=[],
     binaries=[],
-    datas=[
-        # 数据库目录 - 不打包，使用用户现有数据库
-        # ('backend/database', 'database'),  # 注释掉，不打包数据库
-        # 前端打包后的静态文件
-        ('frontend/dist', 'frontend/dist'),
-        # Flask 模板和静态文件（离线 PDF 查看器）
-        ('backend/templates', 'backend/templates'),
-        ('backend/static/pdfjs', 'backend/static/pdfjs'),
-        # CEB 转换工具及依赖 DLL
-        ('tools/ceb2Pdf.exe', 'tools'),
-        ('tools/libeay32.dll', 'tools'),
-        ('tools/msvcr100.dll', 'tools'),
-        ('tools/mfc100.dll', 'tools'),
-        # POI 转换工具（Word/Excel 转 HTML）
-        ('tools/poi-converter.jar', 'tools'),
-        # OFD 转换工具（JAR + JRE）
-        ('tools/ofd-converter.jar', 'tools'),
-        ('tools/jre1.8.0_151', 'tools/jre1.8.0_151'),
-        # kkFileView（独立预览服务）
-        ('tools/kkfileview', 'tools/kkfileview'),
-    ],
+    datas=datas,
     hiddenimports=[
         'cefpython3',
         'cefpython3cef',
@@ -88,26 +104,22 @@ a = Analysis(
         'passlib',
         'passlib.context',
         'passlib.hash',
-        # PyMuPDF 相关
-        'fitz',
-        # PyPDF2 相关
-        'PyPDF2',
-        # python-docx 相关
-        'docx',
-        # openpyxl 相关（Excel 转 HTML）
-        'openpyxl',
-        'openpyxl.cell',
-        'openpyxl.styles',
-        # xlrd 相关（Excel xls 旧格式）
-        'xlrd',
+        # 以下旧预览链路依赖按开关控制，默认不打
+        # 'fitz',
+        # 'PyPDF2',
+        # 'docx',
+        # 'openpyxl',
+        # 'openpyxl.cell',
+        # 'openpyxl.styles',
+        # 'xlrd',
         # pywin32 相关
         'win32com',
         'win32com.client',
         'pywintypes',
-        # PIL/WebP 相关（图片压缩）
-        'PIL',
-        'PIL.Image',
-        'PIL.WebPImage',
+        # PIL/WebP 相关（旧图片预览链路）
+        # 'PIL',
+        # 'PIL.Image',
+        # 'PIL.WebPImage',
     ],
     hookspath=[],
     hooksconfig={},
