@@ -23,12 +23,15 @@ if not os.path.exists(dist_dir) or not os.listdir(dist_dir):
         # 检查 npm 是否可用
         result = subprocess.run(['npm', '--version'], capture_output=True, text=True)
         if result.returncode == 0:
-            # 运行 npm run build
-            result = subprocess.run(['npm', 'run', 'build'], cwd=frontend_dir, shell=True)
+            # Win7 兼容优先：先走 legacy 构建脚本，失败再回退普通构建
+            result = subprocess.run(['npm', 'run', 'build:pyqt'], cwd=frontend_dir, shell=True)
+            if result.returncode != 0:
+                result = subprocess.run(['npm', 'run', 'build'], cwd=frontend_dir, shell=True)
+
             if result.returncode == 0:
                 print("✓ 前端构建成功")
             else:
-                print("⚠ 前端构建失败，请手动运行: cd frontend && npm run build")
+                print("⚠ 前端构建失败，请手动运行: cd frontend && npm run build:pyqt")
         else:
             print("⚠ 未找到 npm，请手动运行: cd frontend && npm run build")
     except Exception as e:
@@ -59,8 +62,11 @@ add_data_if_exists(datas, 'tools/libeay32.dll', 'tools')
 add_data_if_exists(datas, 'tools/msvcr100.dll', 'tools')
 add_data_if_exists(datas, 'tools/mfc100.dll', 'tools')
 
-# kkFileView（独立预览服务，当前主链路）
-add_data_if_exists(datas, 'tools/kkfileview', 'tools/kkfileview')
+# OFD 转换链路（Java + JAR）必须保留
+add_data_if_exists(datas, 'tools/ofd-converter.jar', 'tools')
+add_data_if_exists(datas, 'tools/jre1.8.0_151', 'tools/jre1.8.0_151')
+
+# kkFileView 不再作为默认预览链路，保持不打包以缩小体积
 
 a = Analysis(
     ['backend/app_cef.py'],
@@ -94,22 +100,22 @@ a = Analysis(
         'passlib',
         'passlib.context',
         'passlib.hash',
-        # 以下旧预览链路依赖按开关控制，默认不打
-        # 'fitz',
+        # 当前预览链路依赖
+        'fitz',
+        'openpyxl',
+        'openpyxl.cell',
+        'openpyxl.styles',
+        'xlrd',
+        'PIL',
+        'PIL.Image',
+        'PIL.WebPImage',
+        # 其余可选依赖按开关控制，默认不打
         # 'PyPDF2',
         # 'docx',
-        # 'openpyxl',
-        # 'openpyxl.cell',
-        # 'openpyxl.styles',
-        # 'xlrd',
         # pywin32 相关
         'win32com',
         'win32com.client',
         'pywintypes',
-        # PIL/WebP 相关（旧图片预览链路）
-        # 'PIL',
-        # 'PIL.Image',
-        # 'PIL.WebPImage',
     ],
     hookspath=[],
     hooksconfig={},
@@ -167,7 +173,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='FileManagement_v1.0',
+    name='文件管理系统',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -182,7 +188,7 @@ exe = EXE(
 )
 
 # 打包输出目录名（使用变量避免编码问题）
-DIST_NAME = '文件管理系统_v2.0'
+DIST_NAME = '文件管理系统_v3.1.4'
 
 coll = COLLECT(
     exe,
@@ -225,14 +231,15 @@ def copy_cef_files():
     # 明确指定需要复制的目录
     dirs_to_copy = ['locales', 'resources', 'swiftshader']
 
-    # 自动查找所有 .dll, .dat, .pak, .bin 文件
+    # 自动查找所有 .dll, .dat, .pak, .bin, .exe 文件
     all_files = os.listdir(cef_dir)
     dll_files = [f for f in all_files if f.endswith('.dll')]
     dat_files = [f for f in all_files if f.endswith('.dat')]
     pak_files = [f for f in all_files if f.endswith('.pak')]
     bin_files = [f for f in all_files if f.endswith('.bin')]
+    exe_files = [f for f in all_files if f.endswith('.exe')]
 
-    print(f"✓ 找到 {len(dll_files)} DLL, {len(dat_files)} DAT, {len(pak_files)} PAK, {len(bin_files)} BIN 文件")
+    print(f"✓ 找到 {len(dll_files)} DLL, {len(dat_files)} DAT, {len(pak_files)} PAK, {len(bin_files)} BIN, {len(exe_files)} EXE 文件")
 
     # 先复制目录
     for dir_name in dirs_to_copy:
@@ -244,7 +251,7 @@ def copy_cef_files():
             shutil.copytree(src, dst)
 
     # 复制所有文件
-    all_file_types = dll_files + dat_files + pak_files + bin_files
+    all_file_types = dll_files + dat_files + pak_files + bin_files + exe_files
     copied_count = 0
     for file_name in all_file_types:
         src = os.path.join(cef_dir, file_name)

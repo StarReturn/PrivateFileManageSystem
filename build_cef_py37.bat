@@ -35,7 +35,7 @@ if errorlevel 1 (
 echo.
 echo [3/5] 清理旧的打包文件...
 if exist "build" rmdir /s /q "build"
-if exist "dist\文件管理系统" rmdir /s /q "dist\文件管理系统"
+if exist "dist\文件管理系统_v3.1.2" rmdir /s /q "dist\文件管理系统_v3.1.2"
 
 echo.
 echo [4/5] 开始打包（PyInstaller）...
@@ -51,7 +51,7 @@ echo [5/5] 打包完成！
 echo.
 echo ========================================
 REM    打包结果位置：
-REM    dist\文件管理系统\
+REM    dist\文件管理系统_v3.1.2\
 REM ========================================
 echo.
 echo 注意：此版本支持 Windows 7

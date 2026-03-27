@@ -338,14 +338,40 @@
     <!-- 预览对话框 - 标签页模式 -->
     <el-dialog
       v-model="showPreviewDialog"
-      :title="false"
-      :show-close="false"
       width="95%"
       class="preview-tabs-dialog"
       :fullscreen="previewFullscreen"
-      destroy-on-close
+      :close-on-click-modal="false"
+      :show-close="false"
     >
-      <!-- 标签页 -->
+      <template #header>
+        <div class="preview-dialog-header">
+          <span class="preview-dialog-title">文件预览</span>
+          <div class="preview-dialog-actions">
+            <el-tooltip content="下载当前文件" placement="top">
+              <el-button circle size="small" type="primary" @click="handleDownloadCurrent">
+                <el-icon><Download /></el-icon>
+              </el-button>
+            </el-tooltip>
+            <el-tooltip content="最小化" placement="top">
+              <el-button circle size="small" @click="minimizePreviewDialog">
+                <el-icon><Minus /></el-icon>
+              </el-button>
+            </el-tooltip>
+            <el-tooltip :content="previewFullscreen ? '退出全屏' : '全屏'" placement="top">
+              <el-button circle size="small" @click="togglePreviewFullscreen">
+                <el-icon><FullScreen /></el-icon>
+              </el-button>
+            </el-tooltip>
+            <el-tooltip content="全部关闭" placement="top">
+              <el-button circle size="small" type="danger" plain @click="closeAllPreviewTabs">
+                <el-icon><CloseBold /></el-icon>
+              </el-button>
+            </el-tooltip>
+          </div>
+        </div>
+      </template>
+
       <el-tabs
         v-model="activePreviewTabId"
         type="card"
@@ -359,92 +385,33 @@
           :name="tab.id"
           :label="tab.drawing_name"
         >
-          <!-- 加载状态 -->
-          <div v-if="tab.loading" class="preview-loading">
-            <el-icon class="is-loading" :size="40" color="#409eff"><Loading /></el-icon>
-            <p>{{ getPreviewLoadingText({ file_type: tab.file_type }) }}</p>
-          </div>
-
-          <!-- 错误状态 -->
-          <div v-else-if="tab.error" class="preview-error">
-            <el-result icon="warning" :title="tab.errorMessage">
-              <template #extra>
-                <el-button type="primary" @click="handleCloseTab(tab.id)">关闭</el-button>
-              </template>
-            </el-result>
-          </div>
-
-          <!-- HTML 预览 (Word/Excel) -->
-          <div v-else-if="tab.mode === 'html'" class="html-preview-container">
-            <iframe
-              v-if="tab.htmlPreviewUrl"
-              :key="tab.htmlPreviewUrl"
-              :src="tab.htmlPreviewUrl"
-              class="preview-iframe"
-              sandbox="allow-same-origin allow-scripts allow-modals"
-              @load="console.log('[iframe] 加载完成:', tab.drawing_name)"
-              @error="console.error('[iframe] 加载失败:', tab.drawing_name)"
-            ></iframe>
-          </div>
-
-          <!-- 图片预览 (PDF/OFD/CEB) -->
-          <div v-else-if="tab.mode === 'images'" class="image-preview-container">
-            <!-- 工具栏 -->
-            <div class="preview-toolbar">
-              <el-button-group>
-                <el-button :disabled="tab.currentPage <= 1" @click="goToPrevPage">上一页</el-button>
-                <el-button disabled>{{ tab.currentPage }} / {{ tab.totalPages }}</el-button>
-                <el-button :disabled="tab.currentPage >= tab.totalPages" @click="goToNextPage">下一页</el-button>
-              </el-button-group>
-
-              <el-divider direction="vertical" style="margin: 0 10px;" />
-
-              <div style="display: flex; align-items: center;">
-                <el-button @click="zoomOut" size="small" :disabled="tab.imageScale <= 0.25">-</el-button>
-                <el-slider v-model="scalePercent" :min="25" :max="300" :step="5" style="width: 100px; margin: 0 8px;" />
-                <el-button @click="zoomIn" size="small" :disabled="tab.imageScale >= 3">+</el-button>
-                <span style="margin-left: 8px; width: 50px;">{{ scalePercent }}%</span>
-              </div>
-
-              <el-button @click="togglePreviewFullscreen" size="small" style="margin-left: auto;">
-                {{ previewFullscreen ? '退出全屏' : '全屏' }}
-              </el-button>
-            </div>
-
-            <!-- 图片显示 -->
-            <div
-              class="image-preview-content"
-              @wheel="handleWheel"
-              @mousedown="startDrag"
-              @mousemove="onDrag"
-              @mouseup="stopDrag"
-              @mouseleave="stopDrag"
-            >
-              <img
-                v-if="tab.images && tab.images.length > 0 && tab.currentPage <= tab.images.length"
-                :key="tab.id + '-' + tab.currentPage"
-                :src="tab.images[tab.currentPage - 1]"
-                class="preview-image"
-                :style="{
-                  transform: `scale(${tab.imageScale})`,
-                  transformOrigin: 'center center',
-                  left: (tab.imagePosition?.x || 0) + 'px',
-                  top: (tab.imagePosition?.y || 0) + 'px',
-                  position: tab.isDragging ? 'relative' : 'static'
-                }"
-                draggable="false"
-              />
-            </div>
+          <div class="embedded-preview-container">
+            <PreviewPanel
+              :drawing-id="tab.drawing_id"
+              :file-type="tab.file_type"
+              :drawing-name="tab.drawing_name"
+              :show-header="false"
+            />
           </div>
         </el-tab-pane>
       </el-tabs>
-
-      <!-- 底部按钮 -->
-      <template #footer>
-        <el-button @click="showPreviewDialog = false; previewTabs = []">全部关闭</el-button>
-        <el-button type="primary" @click="handleDownloadCurrent">下载当前文件</el-button>
-      </template>
     </el-dialog>
+
+    <el-badge
+      v-if="showPreviewFab"
+      :value="previewBadgeCount"
+      :max="99"
+      :class="['preview-fab-badge', { 'is-unread': previewUnreadCount > 0 }]"
+    >
+      <el-button
+        :class="['preview-fab', { 'is-unread': previewUnreadCount > 0, 'is-pulse': previewFabPulse }]"
+        type="primary"
+        circle
+        @click="restorePreviewDialog"
+      >
+        <el-icon><View /></el-icon>
+      </el-button>
+    </el-badge>
 
     <!-- 操作记录对话框 -->
     <el-dialog v-model="showOperationLogDialog" title="操作记录" width="80%" class="full-height-dialog">
@@ -785,7 +752,11 @@ import {
   Edit,
   Setting,
   ZoomIn,
-  ZoomOut
+  ZoomOut,
+  View,
+  Minus,
+  FullScreen,
+  CloseBold
 } from '@element-plus/icons-vue'
 import {
   getCategories,
@@ -795,10 +766,10 @@ import {
   getDrawings,
   updateDrawing,
   deleteDrawing,
-  downloadDrawing,
-  getKkPreviewUrl
+  downloadDrawing
 } from '@/api/file'
 import UploadDialog from '@/components/UploadDialog.vue'
+import PreviewPanel from '@/components/PreviewPanel.vue'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -855,6 +826,9 @@ const interfaceSettings = reactive({
 // 预览状态 - 标签页模式
 const showPreviewDialog = ref(false)
 const previewFullscreen = ref(false)
+const previewMinimized = ref(false)
+const previewUnreadCount = ref(0)
+const previewFabPulse = ref(false)
 const MAX_PREVIEW_TABS = 5  // 最多 5 个标签页
 
 // 当前激活的标签页 ID
@@ -866,6 +840,10 @@ const previewTabs = ref([])
 // 获取当前激活的标签页
 const currentPreviewTab = computed(() => {
   return previewTabs.value.find(tab => tab.id === activePreviewTabId.value)
+})
+const showPreviewFab = computed(() => previewMinimized.value && previewTabs.value.length > 0)
+const previewBadgeCount = computed(() => {
+  return previewUnreadCount.value > 0 ? previewUnreadCount.value : previewTabs.value.length
 })
 
 // 缩放百分比计算属性（基于当前标签页）
@@ -1342,6 +1320,16 @@ watch(showUserManageDialog, (val) => {
   if (val) loadUsers()
 })
 
+watch(showPreviewDialog, (val) => {
+  if (!val && previewTabs.value.length > 0) {
+    previewMinimized.value = true
+  } else if (val) {
+    previewMinimized.value = false
+    previewUnreadCount.value = 0
+    previewFabPulse.value = false
+  }
+})
+
 // 监听登录状态变化，重新加载文件列表
 watch(() => userStore.isLoggedIn, () => {
   loadDrawings()
@@ -1710,6 +1698,45 @@ const handleUploadToNode = () => {
 // 生成唯一 ID
 const generateTabId = () => `tab_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
 
+const triggerPreviewFabPulse = () => {
+  previewFabPulse.value = false
+  setTimeout(() => {
+    previewFabPulse.value = true
+    setTimeout(() => {
+      previewFabPulse.value = false
+    }, 1200)
+  }, 10)
+}
+
+const markPreviewUnread = () => {
+  previewUnreadCount.value = Math.min(99, previewUnreadCount.value + 1)
+  triggerPreviewFabPulse()
+}
+
+const minimizePreviewDialog = () => {
+  if (previewTabs.value.length === 0) return
+  previewMinimized.value = true
+  showPreviewDialog.value = false
+}
+
+const restorePreviewDialog = () => {
+  if (previewTabs.value.length === 0) return
+  previewMinimized.value = false
+  previewUnreadCount.value = 0
+  previewFabPulse.value = false
+  showPreviewDialog.value = true
+}
+
+const closeAllPreviewTabs = () => {
+  previewTabs.value = []
+  activePreviewTabId.value = null
+  previewMinimized.value = false
+  previewUnreadCount.value = 0
+  previewFabPulse.value = false
+  previewFullscreen.value = false
+  showPreviewDialog.value = false
+}
+
 // 预览文件 - 标签页模式
 const handlePreview = async (row) => {
   if (!canPreviewFile(row)) {
@@ -1725,24 +1752,38 @@ const handlePreview = async (row) => {
     }
     return
   }
-  try {
-    const response = await getKkPreviewUrl(row.drawing_id)
-    const data = response.data || response
-    const previewUrl = data.preview_url
 
-    if (!previewUrl) {
-      throw new Error(data.error || '未获取到预览地址')
+  const existingTab = previewTabs.value.find(tab => tab.drawing_id === row.drawing_id)
+  if (existingTab) {
+    activePreviewTabId.value = existingTab.id
+    if (previewMinimized.value || !showPreviewDialog.value) {
+      markPreviewUnread()
+      return
     }
-
-    const opened = window.open(previewUrl, '_blank')
-    if (!opened) {
-      ElMessage.warning('预览窗口被拦截，请检查系统设置')
-    }
-  } catch (err) {
-    console.error('[handlePreview] 打开 kkFileView 预览失败:', err)
-    const errorMsg = err.response?.data?.error || err.response?.data?.message || err.message || '预览失败'
-    ElMessage.error(errorMsg)
+    restorePreviewDialog()
+    return
   }
+
+  if (previewTabs.value.length >= MAX_PREVIEW_TABS) {
+    const removedTab = previewTabs.value.shift()
+    if (removedTab && removedTab.id === activePreviewTabId.value) {
+      activePreviewTabId.value = null
+    }
+  }
+
+  const newTab = {
+    id: generateTabId(),
+    drawing_id: row.drawing_id,
+    drawing_name: row.drawing_name,
+    file_type: row.file_type
+  }
+  previewTabs.value.push(newTab)
+  activePreviewTabId.value = newTab.id
+  if (previewMinimized.value) {
+    markPreviewUnread()
+    return
+  }
+  restorePreviewDialog()
 }
 
 // 获取预览加载提示文字
@@ -1765,16 +1806,16 @@ const getPreviewLoadingText = (drawing) => {
 // ==================== 标签页管理函数 ====================
 
 // 关闭标签页
-const handleCloseTab = (targetId) => {
+const handleCloseTab = (targetId, action) => {
+  if (action && action !== 'remove') return
   const index = previewTabs.value.findIndex(tab => tab.id === targetId)
   if (index === -1) return
 
   // 如果关闭的是当前标签页，切换到相邻标签页
   if (targetId === activePreviewTabId.value) {
     if (previewTabs.value.length === 1) {
-      // 最后一个标签页，关闭对话框
-      showPreviewDialog.value = false
-      previewTabs.value = []
+      // 最后一个标签页：全部关闭
+      closeAllPreviewTabs()
       return
     } else if (index > 0) {
       activePreviewTabId.value = previewTabs.value[index - 1].id
@@ -1785,6 +1826,10 @@ const handleCloseTab = (targetId) => {
 
   // 移除标签页
   previewTabs.value.splice(index, 1)
+
+  if (previewTabs.value.length === 0) {
+    closeAllPreviewTabs()
+  }
 }
 
 // 切换标签页
@@ -2535,17 +2580,44 @@ onUnmounted(() => {
 }
 
 /* 标签页预览对话框样式 */
+.preview-tabs-dialog :deep(.el-dialog) {
+  display: flex;
+  flex-direction: column;
+  height: 88vh;
+  max-height: 88vh;
+  margin: 0 auto;
+}
+
+.preview-tabs-dialog :deep(.el-dialog.is-fullscreen) {
+  height: 100vh;
+  max-height: 100vh;
+}
+
+.preview-tabs-dialog :deep(.el-dialog__header) {
+  flex-shrink: 0;
+  padding: 10px 14px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
 .preview-tabs-dialog :deep(.el-dialog__body) {
   padding: 0;
   display: flex;
   flex-direction: column;
-  max-height: 85vh;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.preview-tabs-dialog :deep(.el-dialog__footer) {
+  display: none;
 }
 
 .preview-tabs-dialog :deep(.el-tabs) {
   display: flex;
   flex-direction: column;
   flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .preview-tabs-dialog :deep(.el-tabs__header) {
@@ -2566,15 +2638,36 @@ onUnmounted(() => {
 }
 
 .preview-tabs-dialog :deep(.el-tabs__content) {
+  display: flex;
+  flex-direction: column;
   flex: 1;
-  overflow: hidden;
+  height: 100%;
+  min-height: 0;
   padding: 0;
+  overflow: hidden;
 }
 
 .preview-tabs-dialog :deep(.el-tab-pane) {
-  height: 100%;
   display: flex;
   flex-direction: column;
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* 仅 Excel：全屏时内容区固定高度 980px */
+.preview-tabs-dialog :deep(.el-dialog.is-fullscreen .excel-html-container) {
+  flex: 0 0 980px;
+  height: 980px;
+  max-height: 980px;
+  min-height: 980px;
+}
+
+.preview-tabs-dialog :deep(.el-dialog.is-fullscreen .excel-preview-iframe) {
+  height: 100%;
+  max-height: 100%;
+  min-height: 980px;
 }
 
 /* 预览加载状态 */
@@ -2657,6 +2750,82 @@ onUnmounted(() => {
   border-bottom: 1px solid #e0e0e0;
   flex-shrink: 0;
   gap: 10px;
+}
+
+.preview-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.preview-dialog-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.preview-dialog-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.embedded-preview-container {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  min-height: 520px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+
+.embedded-preview-iframe {
+  position: static;
+  width: 100%;
+  height: 100%;
+  min-height: 520px;
+  border: none;
+  display: block;
+}
+
+.preview-fab-badge {
+  position: fixed;
+  left: 24px;
+  bottom: 24px;
+  z-index: 2200;
+}
+
+.preview-fab {
+  width: 54px;
+  height: 54px;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.2);
+}
+
+.preview-fab.is-unread {
+  box-shadow: 0 10px 24px rgba(245, 108, 108, 0.45);
+}
+
+.preview-fab.is-pulse {
+  animation: previewFabPulse 1.2s ease-out 1;
+}
+
+.preview-fab-badge.is-unread :deep(.el-badge__content) {
+  animation: previewBadgeBounce 0.6s ease-out;
+}
+
+@keyframes previewFabPulse {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.12); }
+  100% { transform: scale(1); }
+}
+
+@keyframes previewBadgeBounce {
+  0% { transform: translateY(0) scale(1); }
+  40% { transform: translateY(-4px) scale(1.15); }
+  100% { transform: translateY(0) scale(1); }
 }
 
 /* 旧的预览样式已删除，由新的标签页样式替代 */

@@ -111,9 +111,46 @@
     <div id="loading" class="loading">正在加载 PDF...</div>
     <div id="error" class="error" style="display: none;"></div>
 
-    <!-- 使用本地 PDF.js -->
-    <script src="{{ url_for('static', filename='pdfjs/pdf.min.js') }}"></script>
     <script>
+        const pdfJsCandidates = [
+            "/assets/pdfjs/pdf.min.js",
+            "{{ url_for('static', filename='pdfjs/pdf.min.js') }}",
+            "/static/pdfjs/pdf.min.js",
+            "./static/pdfjs/pdf.min.js"
+        ];
+        const pdfWorkerCandidates = [
+            "/assets/pdfjs/pdf.worker.min.js",
+            "{{ url_for('static', filename='pdfjs/pdf.worker.min.js') }}",
+            "/static/pdfjs/pdf.worker.min.js",
+            "./static/pdfjs/pdf.worker.min.js"
+        ];
+
+        function loadScriptSequential(candidates, index = 0) {
+            return new Promise((resolve, reject) => {
+                if (index >= candidates.length) {
+                    reject(new Error('PDF.js 脚本加载失败，候选路径均不可用'));
+                    return;
+                }
+                const src = candidates[index];
+                const script = document.createElement('script');
+                script.src = src;
+                script.onload = () => {
+                    // 防止服务器错误回退 HTML 导致“加载成功但库未注入”
+                    if (typeof window.pdfjsLib === 'undefined') {
+                        loadScriptSequential(candidates, index + 1).then(resolve).catch(reject);
+                        return;
+                    }
+                    resolve(src);
+                };
+                script.onerror = () => loadScriptSequential(candidates, index + 1).then(resolve).catch(reject);
+                document.head.appendChild(script);
+            });
+        }
+
+        function resolveWorkerSrc() {
+            return pdfWorkerCandidates[0] || "/static/pdfjs/pdf.worker.min.js";
+        }
+
         // 从模板获取 PDF URL（Flask 渲染时传入，已自动解码）
         const pdfUrl = {{ pdf_url | tojson | safe }};
 
@@ -236,12 +273,17 @@
 
             // 检查 PDF.js 是否已加载
             if (typeof pdfjsLib === 'undefined') {
-                showError('PDF.js 库未加载');
+                showError('PDF.js 库未加载（脚本未注入）');
                 console.error('pdfjsLib 未定义');
                 return;
             }
 
             console.log('PDF.js 版本:', pdfjsLib.version);
+            try {
+                pdfjsLib.GlobalWorkerOptions.workerSrc = resolveWorkerSrc();
+            } catch (e) {
+                console.warn('设置 PDF worker 失败，退化主线程渲染', e);
+            }
 
             // 使用配置对象加载 PDF（主线程模式）
             const loadingTask = pdfjsLib.getDocument({
@@ -323,8 +365,15 @@
         // 检查 URL 参数
         if (pdfUrl) {
             console.log('PDF URL from template:', pdfUrl);
-            // Flask 已经自动解码了 URL，不需要再次解码
-            loadPDF(pdfUrl);
+            loadScriptSequential(pdfJsCandidates)
+                .then((usedSrc) => {
+                    console.log('✓ PDF.js 脚本加载成功:', usedSrc);
+                    loadPDF(pdfUrl);
+                })
+                .catch((err) => {
+                    console.error(err);
+                    showError('PDF.js 库未加载，请检查 static/pdfjs 资源是否打包');
+                });
         } else {
             showError('未提供 PDF URL');
         }

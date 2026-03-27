@@ -26,25 +26,17 @@ os.environ['CEF_RESOURCES_DIR_PATH'] = exe_dir
 os.environ['CEF_LOCALES_DIR_PATH'] = os.path.join(exe_dir, 'locales')
 
 # ========== 命令行参数（必须在导入 cefpython 之前设置）==========
-# GPU 禁用参数（解决 SharedMemory read failed 错误）
+# CEF 启动参数（最小风险集，优先保证页面可渲染）
 gpu_args = [
     "--disable-gpu",
     "--disable-gpu-compositing",
-    "--disable-gpu-sandbox",
-    "--disable-software-rasterizer",
-    "--disable-d3d11",
-    "--disable-direct3d11",
-    "--disable-direct3d9",
-    "--disable-webgl",
-    "--disable-webgl-image-chromium",
-    "--disable-webgl2",
 ]
 
 # 资源路径参数
 resource_args = [
     f"--resources-dir-path={exe_dir}",
     f"--locales-dir-path={os.path.join(exe_dir, 'locales')}",
-    "--single-process",  # 回到单进程模式，确保稳定性
+    "--no-proxy-server",
 ]
 
 # 添加所有参数
@@ -56,6 +48,7 @@ import threading
 import time
 import subprocess
 import glob
+from urllib.parse import urljoin
 
 # 添加项目根目录到路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -109,14 +102,25 @@ settings = {
     "locale": "zh-CN",
     "resources_dir_path": exe_dir,  # 指定 CEF 资源文件目录
     "locales_dir_path": os.path.join(exe_dir, "locales"),  # 指定 locales 目录
-    "single_process": True,  # 使用单进程模式
+    "single_process": False,  # 多进程模式更稳定，避免首页空白
 }
+
+# 显式指定 CEF 子进程路径，避免错误拉起 content_renderer.service.exe 导致白屏
+subprocess_candidates = [
+    os.path.join(exe_dir, "subprocess.exe"),
+    os.path.join(exe_dir, "cefpython3", "subprocess.exe"),
+]
+for sp in subprocess_candidates:
+    if os.path.exists(sp):
+        settings["browser_subprocess_path"] = sp
+        break
 
 # 预览与 kkFileView 配置
 KK_PORT = 8012
 KK_HEALTH_URL = f"http://127.0.0.1:{KK_PORT}"
 WINDOWS_CREATE_NO_WINDOW = 0x08000000
 WINDOWS_STARTF_USESHOWWINDOW = 0x00000001
+ENABLE_KKFILEVIEW = False
 
 
 class KkFileViewManager:
@@ -124,7 +128,7 @@ class KkFileViewManager:
 
     def __init__(self):
         self.process = None
-        self.kk_root = os.path.join(exe_dir, 'tools', 'kkfileview')
+        self.kk_root = os.path.join(exe_dir, 'tools', 'kkfileview', 'kkFileView-4.4.0')
 
     def _is_ready(self):
         try:
@@ -148,8 +152,9 @@ class KkFileViewManager:
         )
 
     def _get_kk_java_command(self):
-        """优先使用 kkFileView 自带 JRE，其次使用系统 java"""
+        """默认使用项目内 JRE1.8，再回退 kkFileView 内置 JRE，最后系统 java"""
         java_candidates = [
+            os.path.join(exe_dir, 'tools', 'jre1.8.0_151', 'bin', 'java.exe'),
             os.path.join(self.kk_root, 'jre', 'bin', 'java.exe'),
             os.path.join(self.kk_root, 'runtime', 'bin', 'java.exe'),
             'java'
@@ -178,7 +183,7 @@ class KkFileViewManager:
                 print(f"⚠ 启动 kkFileView startup.bat 失败: {e}")
 
         if not started:
-            jar_candidates = glob.glob(os.path.join(self.kk_root, '*.jar'))
+            jar_candidates = glob.glob(os.path.join(self.kk_root, 'bin', '*.jar')) + glob.glob(os.path.join(self.kk_root, '*.jar'))
             if jar_candidates:
                 try:
                     java_cmd = self._get_kk_java_command()
@@ -291,76 +296,57 @@ class PopupHandler:
     def __init__(self, preview_manager):
         self.preview_manager = preview_manager
 
-    def OnBeforePopup(self, browser, frame, target_url, target_frame_name,
-                      target_disposition, user_gesture, popup_features,
-                      window_info, client, browser_settings, no_javascript_access):
+    def OnBeforePopup(self, *args, **kwargs):
+        """
+        兼容 CEF Python 不同版本的 OnBeforePopup 回调参数签名。
+        某些版本会通过关键字参数传入 window_info_out 等字段。
+        """
+        target_url = (
+            kwargs.get('target_url')
+            or kwargs.get('targetUrl')
+            or kwargs.get('url')
+        )
+        if not target_url:
+            # 兼容不同版本参数顺序：从 args 中找最像 URL 的字符串
+            for item in args:
+                if isinstance(item, str) and (item.startswith('http://') or item.startswith('https://') or item.startswith('/')):
+                    target_url = item
+                    break
+
+        # 尝试获取当前 frame URL，用于补全相对路径
+        frame_url = None
+        try:
+            frame = kwargs.get('frame') if isinstance(kwargs, dict) else None
+            if frame is None and len(args) >= 2:
+                frame = args[1]
+            if frame and hasattr(frame, 'GetUrl'):
+                frame_url = frame.GetUrl()
+        except Exception:
+            frame_url = None
+
         if target_url:
+            if target_url.startswith('/'):
+                base = frame_url or f'http://127.0.0.1:{FLASK_PORT}/'
+                target_url = urljoin(base, target_url)
+            print(f"[Popup] open: target_url={target_url}, frame_url={frame_url}")
             self.preview_manager.open_window(target_url, title='文件预览')
             return True
+        print(f"[Popup] ignored: args_len={len(args)}, kwargs_keys={list(kwargs.keys()) if isinstance(kwargs, dict) else []}")
         return False
-
-
-class DownloadHandler:
-    """下载处理器"""
-
-    def __init__(self, client):
-        self.client = client
-
-    def OnBeforeDownload(self, browser, download_item, suggested_name, callback):
-        # 获取默认下载路径
-        import tkinter as tk
-        from tkinter import filedialog
-
-        root = tk.Tk()
-        root.withdraw()
-
-        # 获取用户选择的保存路径
-        file_path = filedialog.asksaveasfilename(
-            title="保存文件",
-            initialfile=suggested_name,
-            defaultextension=os.path.splitext(suggested_name)[1] or ".*",
-            filetypes=[("所有文件", "*.*")]
-        )
-
-        root.destroy()
-
-        if file_path:
-            # 继续下载
-            callback.Continue(file_path, True)
-            print(f"下载文件到: {file_path}")
-        else:
-            # 取消下载
-            callback.Cancel()
 
 
 class ClientHandler:
     """CEF 客户端处理器"""
 
     def __init__(self, preview_manager):
-        self.download_handler = None
         self.popup_handler = PopupHandler(preview_manager)
 
     def OnBeforeClose(self, browser):
         """浏览器关闭时"""
         pass
 
-    def OnBeforeDownload(self, browser, download_item, suggested_name, callback):
-        """下载前回调"""
-        if not self.download_handler:
-            self.download_handler = DownloadHandler(browser)
-        self.download_handler.OnBeforeDownload(browser, download_item, suggested_name, callback)
-
-    def OnDownloadUpdated(self, browser, download_item, callback):
-        """下载更新回调"""
-        pass
-
-    def OnBeforePopup(self, browser, frame, target_url, target_frame_name,
-                      target_disposition, user_gesture, popup_features,
-                      window_info, client, browser_settings, no_javascript_access):
-        return self.popup_handler.OnBeforePopup(
-            browser, frame, target_url, target_frame_name, target_disposition,
-            user_gesture, popup_features, window_info, client, browser_settings, no_javascript_access
-        )
+    def OnBeforePopup(self, *args, **kwargs):
+        return self.popup_handler.OnBeforePopup(*args, **kwargs)
 
 
 def create_flask_app():
@@ -382,7 +368,10 @@ def run_flask():
 def main():
     """启动桌面应用"""
     print("正在启动文件管理系统...")
-    kk_manager = KkFileViewManager()
+    print(f"CEF args: {[a for a in sys.argv if a.startswith('--')]}")
+    print(f"CEF single_process: {settings.get('single_process')}")
+    print(f"CEF browser_subprocess_path: {settings.get('browser_subprocess_path')}")
+    kk_manager = KkFileViewManager() if ENABLE_KKFILEVIEW else None
 
     # 在后台线程启动Flask
     flask_thread = threading.Thread(target=run_flask, daemon=True)
@@ -406,8 +395,9 @@ def main():
     if not flask_ready:
         print("⚠ 后端服务启动超时")
 
-    # 启动 kkFileView（静默）
-    kk_manager.start()
+    # 启动 kkFileView（静默，可按开关禁用）
+    if kk_manager:
+        kk_manager.start()
 
     # 检查前端文件
     frontend_path = os.path.join(exe_dir, 'frontend', 'dist', 'index.html')
@@ -520,7 +510,8 @@ def main():
         # 清理 CEF
         print("正在关闭...")
         cef.Shutdown()
-        kk_manager.stop()
+        if kk_manager:
+            kk_manager.stop()
         print("CEF 已关闭，程序退出中...")
 
         # 可选：延迟 2 秒关闭（方便查看日志）

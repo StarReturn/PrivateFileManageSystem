@@ -1,4 +1,4 @@
-# File Management System - Python 3.7 Compatible Dependencies
+﻿# File Management System - Python 3.7 Compatible Dependencies
 # For Windows 7 compatibility packaging with CEF Python
 # OFD support via JAR (OFDRW) - no Python OFD library needed
 #

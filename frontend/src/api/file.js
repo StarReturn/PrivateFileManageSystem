@@ -83,10 +83,11 @@ export const previewDrawing = (drawingId) => {
 }
 
 // 获取预览图片（将 PDF/Word/Excel/OFD/CEB 转换为图片）
-export const getPreviewImages = (drawingId) => {
+export const getPreviewImages = (drawingId, params = {}) => {
   return request({
     url: `/drawings/${drawingId}/preview-images`,
-    method: 'GET'
+    method: 'GET',
+    params
   })
 }
 

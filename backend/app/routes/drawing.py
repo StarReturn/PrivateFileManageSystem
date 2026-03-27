@@ -452,8 +452,6 @@ def preview_drawing(drawing_id):
 
         from app.utils.temp_cleanup import TempFileCleaner
         from app.utils.preview import PreviewManager
-        import os
-        import tempfile
 
         # PDF 文件：直接返回
         if drawing.file_type == 'pdf':
@@ -703,17 +701,61 @@ def get_preview_images(drawing_id):
             _log_operation(drawing_id, 'preview')
 
         # 导入图片转换工具和缓存
-        from app.utils.image_preview import pdf_to_images
+        from app.utils.image_preview import pdf_to_images, pdf_page_count, pdf_to_image_page
         from app.utils.preview_cache import get_preview_cache
         from app.utils.temp_cleanup import TempFileCleaner
 
-        # PDF 文件：使用 PyMuPDF 转换为图片
-        if drawing.file_type == 'pdf':
-            # 检查缓存
-            cache = get_preview_cache()
-            cache_key = f"preview_images_{drawing_id}"
-            cached_images = cache.get(cache_key)
+        lazy_mode = request.args.get('lazy', '0') == '1'
+        meta_only = request.args.get('meta', '0') == '1'
+        page = request.args.get('page', type=int)
+        dpi = request.args.get('dpi', default=150, type=int)
+        dpi = max(72, min(dpi, 220))
 
+        def _respond_pdf_images(pdf_blob, cache_prefix):
+            cache = get_preview_cache()
+            meta_key = f"{cache_prefix}_meta_dpi{dpi}"
+
+            if lazy_mode or meta_only or page is not None:
+                page_count = cache.get(meta_key)
+                if not page_count:
+                    page_count = pdf_page_count(pdf_blob)
+                    cache.set(meta_key, page_count)
+
+                if page_count <= 0:
+                    return jsonify({'error': 'PDF 转图片失败'}), 500
+
+                if meta_only or page is None:
+                    return jsonify({
+                        'success': True,
+                        'lazy': True,
+                        'page_count': page_count,
+                        'file_name': drawing.drawing_name
+                    }), 200
+
+                if page < 1 or page > page_count:
+                    return jsonify({'error': '页码超出范围', 'page_count': page_count}), 400
+
+                page_key = f"{cache_prefix}_page_{page}_dpi{dpi}"
+                image = cache.get(page_key)
+                if not image:
+                    image = pdf_to_image_page(pdf_blob, page=page, dpi=dpi, use_webp=True, webp_quality=80)
+                    if not image:
+                        return jsonify({'error': '页面渲染失败'}), 500
+                    cache.set(page_key, image)
+
+                return jsonify({
+                    'success': True,
+                    'lazy': True,
+                    'page': page,
+                    'page_count': page_count,
+                    'image': image,
+                    'images': [image],
+                    'file_name': drawing.drawing_name
+                }), 200
+
+            # 兼容旧模式：一次返回全部页
+            cache_key = f"{cache_prefix}_all_dpi{dpi}"
+            cached_images = cache.get(cache_key)
             if cached_images:
                 print(f"[图片预览] 使用缓存：drawing_id={drawing_id}")
                 return jsonify({
@@ -723,24 +765,21 @@ def get_preview_images(drawing_id):
                     'file_name': drawing.drawing_name
                 }), 200
 
-            # 未命中缓存，使用 PyMuPDF 转换
-            print(f"[图片预览] 转换 PDF (PyMuPDF): drawing_id={drawing_id}")
-
-            images = pdf_to_images(drawing.file_blob, dpi=150, use_webp=True, webp_quality=80)
-
+            images = pdf_to_images(pdf_blob, dpi=dpi, use_webp=True, webp_quality=80)
             if not images:
                 return jsonify({'error': 'PDF 转图片失败'}), 500
-
-            # 保存到缓存
             cache.set(cache_key, images)
             print(f"[图片预览] 已缓存：drawing_id={drawing_id}, 页数={len(images)}")
-
             return jsonify({
                 'success': True,
                 'images': images,
                 'page_count': len(images),
                 'file_name': drawing.drawing_name
             }), 200
+
+        # PDF 文件：使用 PyMuPDF 转换为图片
+        if drawing.file_type == 'pdf':
+            return _respond_pdf_images(drawing.file_blob, f"preview_images_{drawing_id}_pdf")
 
         # Word 文档：先转换为 PDF，再转换为图片
         elif drawing.file_type in ['doc', 'docx']:
@@ -779,14 +818,7 @@ def get_preview_images(drawing_id):
                         pass
 
             if pdf_blob:
-                images = pdf_to_images(pdf_blob)
-                if images:
-                    return jsonify({
-                        'success': True,
-                        'images': images,
-                        'page_count': len(images),
-                        'file_name': drawing.drawing_name
-                    }), 200
+                return _respond_pdf_images(pdf_blob, f"preview_images_{drawing_id}_doc")
 
             return jsonify({'error': 'Word 文档转换失败'}), 500
 
@@ -819,14 +851,7 @@ def get_preview_images(drawing_id):
                         pass
 
             if pdf_blob:
-                images = pdf_to_images(pdf_blob)
-                if images:
-                    return jsonify({
-                        'success': True,
-                        'images': images,
-                        'page_count': len(images),
-                        'file_name': drawing.drawing_name
-                    }), 200
+                return _respond_pdf_images(pdf_blob, f"preview_images_{drawing_id}_excel")
 
             return jsonify({'error': 'Excel 文档转换失败，请确保系统已安装 Microsoft Excel'}), 500
 
@@ -850,7 +875,6 @@ def get_preview_images(drawing_id):
 
                 if pdf_blob:
                     # 将转换后的 PDF 保存到缓存
-                    import tempfile
                     temp_dir = tempfile.gettempdir()
                     cached_pdf_name = TempFileCleaner.get_temp_pdf_key(drawing_id, drawing.file_blob)
                     cached_pdf_path = os.path.join(temp_dir, cached_pdf_name)
@@ -862,15 +886,7 @@ def get_preview_images(drawing_id):
                         pass
 
             if pdf_blob:
-                # PDF 转图片
-                images = pdf_to_images(pdf_blob)
-                if images:
-                    return jsonify({
-                        'success': True,
-                        'images': images,
-                        'page_count': len(images),
-                        'file_name': drawing.drawing_name
-                    }), 200
+                return _respond_pdf_images(pdf_blob, f"preview_images_{drawing_id}_ofd")
 
             # OFD 转换失败
             return jsonify({
@@ -901,7 +917,6 @@ def get_preview_images(drawing_id):
 
                 if pdf_blob:
                     # 将转换后的 PDF 保存到缓存
-                    import tempfile
                     temp_dir = tempfile.gettempdir()
                     cached_pdf_name = TempFileCleaner.get_temp_pdf_key(drawing_id, drawing.file_blob)
                     cached_pdf_path = os.path.join(temp_dir, cached_pdf_name)
@@ -913,15 +928,7 @@ def get_preview_images(drawing_id):
                         pass
 
             if pdf_blob:
-                # PDF 转图片
-                images = pdf_to_images(pdf_blob)
-                if images:
-                    return jsonify({
-                        'success': True,
-                        'images': images,
-                        'page_count': len(images),
-                        'file_name': drawing.drawing_name
-                    }), 200
+                return _respond_pdf_images(pdf_blob, f"preview_images_{drawing_id}_ceb")
 
             return jsonify({'error': 'CEB 文档转换失败，请确保 tools/ceb2Pdf.exe 存在'}), 500
 
@@ -971,10 +978,31 @@ def preview_drawing_html(drawing_id):
         # 导入转换工具和缓存
         from app.utils.poi_converter import word_to_html, excel_to_html, pdf_to_html, check_poi_converter_available
         from app.utils.preview_cache import get_preview_cache
+        from app.utils.excel_to_html import DEFAULT_MAX_ROWS, DEFAULT_MAX_COLS
+
+        def _safe_int(value, default_value, min_value=1, max_value=20000):
+            try:
+                parsed = int(value)
+                return min(max(parsed, min_value), max_value)
+            except (TypeError, ValueError):
+                return default_value
+
+        requested_full = request.args.get('full', '0') == '1'
+        default_rows = 5000 if requested_full else DEFAULT_MAX_ROWS
+        default_cols = 300 if requested_full else DEFAULT_MAX_COLS
+        excel_max_rows = _safe_int(request.args.get('max_rows'), default_rows)
+        excel_max_cols = _safe_int(request.args.get('max_cols'), default_cols)
+
+        # 先确定转换链路，避免缓存命中到错误版本
+        use_poi = check_poi_converter_available()
 
         # 检查缓存
         cache = get_preview_cache()
-        cache_key = f"preview_html_{drawing_id}"
+        if drawing.file_type in ['xlsx', 'xls']:
+            excel_render_mode = 'poi' if use_poi else 'openpyxl'
+            cache_key = f"preview_html_{drawing_id}_{drawing.file_type}_{excel_render_mode}_{excel_max_rows}_{excel_max_cols}"
+        else:
+            cache_key = f"preview_html_{drawing_id}_{drawing.file_type}_{'poi' if use_poi else 'native'}"
         cached_html = cache.get(cache_key)
         if cached_html:
             print(f"[HTML 预览] 使用缓存：drawing_id={drawing_id}")
@@ -986,7 +1014,6 @@ def preview_drawing_html(drawing_id):
 
         # 未命中缓存，进行转换
         html_content = None
-        use_poi = check_poi_converter_available()
 
         if drawing.file_type in ['doc', 'docx']:
             # Word 文档
@@ -1012,7 +1039,11 @@ def preview_drawing_html(drawing_id):
                 print(f"[HTML 预览] POI 不可用，使用 openpyxl: drawing_id={drawing_id}")
                 # 备用方案：使用 openpyxl
                 from app.utils.excel_to_html import excel_to_html as excel_to_html_openpyxl
-                result = excel_to_html_openpyxl(drawing.file_blob)
+                result = excel_to_html_openpyxl(
+                    drawing.file_blob,
+                    max_rows=excel_max_rows,
+                    max_cols=excel_max_cols
+                )
                 if result:
                     html_content = result['html']
 

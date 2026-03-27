@@ -31,6 +31,12 @@ const routes = [
     name: 'UserProfile',
     component: () => import('@/views/UserProfile.vue'),
     meta: { requiresAuth: true }
+  },
+  {
+    path: '/preview-window/:drawingId',
+    name: 'PreviewWindow',
+    component: () => import('@/views/PreviewWindow.vue'),
+    meta: { requiresAuth: false }
   }
 ]
 
